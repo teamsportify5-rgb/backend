@@ -3,11 +3,21 @@ from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, Attendance, AttendanceStatus
+from app.models import User, Attendance, AttendanceStatus, UserRole
 from app.schemas import AttendanceCreate, AttendanceCheckOut, AttendanceResponse
 from app.auth import get_current_user
 
 router = APIRouter()
+
+_ATTENDANCE_ROLES = frozenset({UserRole.ADMIN, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.WORKER})
+
+
+def _require_attendance_role(current_user: User) -> None:
+    if current_user.role not in _ATTENDANCE_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Attendance is only available for admin and staff accounts, not customers.",
+        )
 
 
 @router.post("/check-in", response_model=AttendanceResponse, status_code=status.HTTP_201_CREATED)
@@ -16,15 +26,22 @@ async def check_in(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    _require_attendance_role(current_user)
+
     # Use current user's ID if not specified or if user is checking themselves in
     employee_id = attendance_data.employee_id if current_user.role.value in ["admin", "manager"] else current_user.id
-    
+
     # Verify employee exists
     employee = db.query(User).filter(User.id == employee_id).first()
     if not employee:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Employee not found"
+        )
+    if employee.role == UserRole.CUSTOMER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Attendance cannot be recorded for customer accounts.",
         )
     
     # Check if attendance record already exists for today
@@ -66,6 +83,8 @@ async def check_out(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    _require_attendance_role(current_user)
+
     # Use current user's ID if not specified or if user is checking themselves out
     employee_id = attendance_data.employee_id if current_user.role.value in ["admin", "manager"] else current_user.id
     
@@ -98,8 +117,10 @@ async def get_today_attendance(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    _require_attendance_role(current_user)
+
     today = date.today()
-    
+
     # Admin and manager can see all attendance
     # Others can only see their own
     if current_user.role.value in ["admin", "manager"]:
@@ -121,6 +142,17 @@ async def get_employee_attendance(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    _require_attendance_role(current_user)
+
+    target = db.query(User).filter(User.id == employee_id).first()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if target.role == UserRole.CUSTOMER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Attendance history is not available for customer accounts.",
+        )
+
     # Check permissions
     if current_user.role.value not in ["admin", "manager"] and current_user.id != employee_id:
         raise HTTPException(

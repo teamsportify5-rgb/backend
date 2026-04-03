@@ -3,9 +3,10 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from app.database import get_db
 from app.models import User
-from app.schemas import UserCreate, UserUpdate, UserResponse, Token, LoginRequest
+from app.schemas import UserCreate, UserUpdate, UserResponse, Token, LoginRequest, FCMTokenRequest
 from app.auth import (
     get_password_hash,
     authenticate_user,
@@ -72,6 +73,34 @@ async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.post("/register-fcm-token")
+async def register_fcm_token(
+    data: FCMTokenRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Register FCM token for push notifications. Call from mobile app after login."""
+    current_user.fcm_token = data.fcm_token
+    try:
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        raw = str(getattr(e, "orig", e)).lower()
+        if "fcm_token" in raw or "no such column" in raw:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Database is missing the fcm_token column. "
+                    "Run backend/NOTIFICATION_MIGRATION.sql on your database, then redeploy if needed."
+                ),
+            ) from e
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not save push token.",
+        ) from e
+    return {"message": "FCM token registered"}
 
 
 @router.get("/users", response_model=List[UserResponse])

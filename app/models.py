@@ -35,6 +35,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(Enum(UserRole), nullable=False, default=UserRole.WORKER)
     phone = Column(String(20), nullable=True)
+    fcm_token = Column(String(500), nullable=True)  # Firebase Cloud Messaging token for push notifications
     # Salary settings (can be set by admin)
     daily_rate = Column(Float, nullable=True)  # Daily salary rate
     created_at = Column(DateTime(timezone=True), server_default=func.now())

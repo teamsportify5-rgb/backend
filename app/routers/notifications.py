@@ -53,6 +53,13 @@ class NotificationResponse(BaseModel):
     message_id: Optional[str] = None
 
 
+def _ensure_string_data(data: Optional[dict]) -> dict:
+    """FCM data payload values must be strings."""
+    if not data:
+        return {}
+    return {k: str(v) for k, v in data.items()}
+
+
 def send_notification_to_token(fcm_token: str, title: str, body: str, data: Optional[dict] = None):
     """Send a notification to a specific FCM token."""
     try:
@@ -61,7 +68,7 @@ def send_notification_to_token(fcm_token: str, title: str, body: str, data: Opti
                 title=title,
                 body=body,
             ),
-            data=data or {},
+            data=_ensure_string_data(data),
             token=fcm_token,
         )
         response = messaging.send(message)
@@ -81,14 +88,12 @@ async def notify_user(
     current_user: User = Depends(get_current_user)
 ):
     """Send a notification to a specific user by user ID."""
-    # Only admin and manager can send notifications
     if current_user.role.value not in ["admin", "manager"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to send notifications"
         )
     
-    # Get the target user
     target_user = db.query(User).filter(User.id == user_id).first()
     if not target_user:
         raise HTTPException(
@@ -96,24 +101,26 @@ async def notify_user(
             detail="User not found"
         )
     
-    # In a real implementation, you would store FCM tokens in the database
-    # For now, we'll use a placeholder approach where tokens are stored in user table or a separate table
-    # This is a simplified version - you should add an fcm_token field to the User model
-    # or create a separate user_tokens table
+    if not target_user.fcm_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"User {target_user.name} has not registered for push notifications"
+        )
     
-    # Placeholder: Check if user has FCM token stored (you need to add this field to User model)
-    # For now, we'll just return success but note that token storage needs to be implemented
     try:
-        # In production, retrieve FCM token from database:
-        # fcm_token = target_user.fcm_token or get_fcm_token_from_database(user_id)
-        
-        # For now, we'll return a message indicating the notification was queued
-        # You need to implement FCM token storage and retrieval
+        msg_id = send_notification_to_token(
+            fcm_token=target_user.fcm_token,
+            title=notification.title,
+            body=notification.body,
+            data=notification.data
+        )
         return NotificationResponse(
             success=True,
-            message=f"Notification queued for user {target_user.name}",
-            message_id=None
+            message=f"Notification sent to {target_user.name}",
+            message_id=msg_id
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -127,27 +134,42 @@ async def notify_all(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Send a notification to all users."""
-    # Only admin can send notifications to all users
+    """Send a notification to all users with registered FCM tokens."""
     if current_user.role.value != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admin can send notifications to all users"
         )
     
+    tokens = [u.fcm_token for u in db.query(User).filter(User.fcm_token.is_not(None)).all()]
+    
+    if not tokens:
+        return NotificationResponse(
+            success=True,
+            message="No users have registered for push notifications",
+            message_id=None
+        )
+    
     try:
-        # In production, retrieve all FCM tokens from database
-        # For now, this is a placeholder
-        # You would do something like:
-        # tokens = db.query(User.fcm_token).filter(User.fcm_token.isnot(None)).all()
-        # response = messaging.send_multicast(messaging.MulticastMessage(...))
-        
-        # Get all users (for counting purposes)
-        all_users = db.query(User).count()
+        # FCM multicast limit is 500 tokens per request
+        batch_size = 500
+        total_success = 0
+        for i in range(0, len(tokens), batch_size):
+            batch = tokens[i:i + batch_size]
+            message = messaging.MulticastMessage(
+                notification=messaging.Notification(
+                    title=notification.title,
+                    body=notification.body,
+                ),
+                data=_ensure_string_data(notification.data),
+                tokens=batch,
+            )
+            response = messaging.send_multicast(message)
+            total_success += response.success_count
         
         return NotificationResponse(
             success=True,
-            message=f"Notification queued for {all_users} users",
+            message=f"Notification sent to {total_success} users",
             message_id=None
         )
     except Exception as e:

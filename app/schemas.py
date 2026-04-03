@@ -49,6 +49,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class FCMTokenRequest(BaseModel):
+    fcm_token: str
+
+
 # Order Schemas
 class OrderBase(BaseModel):
     product: str
@@ -132,7 +136,7 @@ class PayrollUpdate(BaseModel):
 class PayrollResponse(PayrollBase):
     payroll_id: int
     employee_id: int
-    generated_at: datetime
+    generated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
