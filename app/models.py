@@ -56,6 +56,7 @@ class Order(Base):
     quantity = Column(Integer, nullable=False, default=1)
     status = Column(Enum(OrderStatus), nullable=False, default=OrderStatus.PENDING)
     due_date = Column(Date, nullable=True)
+    due_reminder_sent_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

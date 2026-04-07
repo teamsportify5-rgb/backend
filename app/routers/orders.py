@@ -5,6 +5,7 @@ from app.database import get_db
 from app.models import User, Order, OrderStatus, Inventory
 from app.schemas import OrderCreate, OrderUpdate, OrderResponse
 from app.auth import get_current_user
+from app.push_delivery import try_notify_user
 
 router = APIRouter()
 
@@ -33,6 +34,18 @@ async def create_order(
     db.add(new_order)
     db.commit()
     db.refresh(new_order)
+
+    due_str = f" Due: {new_order.due_date}." if new_order.due_date else ""
+    try_notify_user(
+        customer,
+        "New order assigned",
+        f"{new_order.product} (×{new_order.quantity}).{due_str}",
+        {
+            "type": "order_assigned",
+            "order_id": str(new_order.order_id),
+        },
+    )
+
     return new_order
 
 
@@ -126,8 +139,10 @@ async def update_order(
         if order_data.status is not None:
             order.status = order_data.status
         if order_data.due_date is not None:
+            if order_data.due_date != order.due_date:
+                order.due_reminder_sent_at = None
             order.due_date = order_data.due_date
-    
+
     db.commit()
     db.refresh(order)
     return order

@@ -76,6 +76,7 @@ class OrderResponse(OrderBase):
     customer_id: int
     status: OrderStatus
     created_at: datetime
+    due_reminder_sent_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

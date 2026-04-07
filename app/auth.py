@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Swagger OAuth2 posts form username+password to tokenUrl; /auth/login accepts JSON or that form.
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this-in-production")

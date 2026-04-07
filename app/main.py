@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.database import engine, Base
-from app.routers import auth, orders, attendance, payroll, inventory, ai, notifications
+from app.routers import auth, orders, attendance, payroll, inventory, ai, notifications, cron
 import os
 from pathlib import Path
 
@@ -40,6 +40,7 @@ app.include_router(payroll.router, prefix="/payroll", tags=["Payroll"])
 app.include_router(inventory.router, prefix="/inventory", tags=["Inventory"])
 app.include_router(ai.router, prefix="/ai", tags=["AI Image Generation"])
 app.include_router(notifications.router, prefix="/notify", tags=["Notifications"])
+app.include_router(cron.router)
 
 # Mount static files for AI-generated images (use /tmp on Vercel - ephemeral)
 static_dir = Path("/tmp/static") if os.getenv("VERCEL") else Path("static")

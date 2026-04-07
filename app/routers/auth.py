@@ -1,7 +1,6 @@
 from datetime import timedelta
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from app.database import get_db
@@ -54,20 +53,56 @@ async def register(
     return new_user
 
 
+def _token_response_for_user(user: User) -> Token:
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    return Token(access_token=access_token, token_type="bearer")
+
+
 @router.post("/login", response_model=Token)
-async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
-    user = authenticate_user(db, login_data.email, login_data.password)
+async def login(request: Request, db: Session = Depends(get_db)):
+    """
+    Mobile/web: JSON `{"email","password"}`.
+    Swagger OAuth2 Authorize: form `username` (your email) + `password`.
+    """
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+
+    if content_type == "application/json":
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid JSON body",
+            )
+        try:
+            login_data = LoginRequest(**body)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail='Expected JSON: {"email":"you@example.com","password":"..."}',
+            )
+        user = authenticate_user(db, str(login_data.email), login_data.password)
+    else:
+        form = await request.form()
+        username = form.get("username")
+        password = form.get("password")
+        if not username or not password:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Send JSON {email,password} or form fields username (email) and password",
+            )
+        user = authenticate_user(db, str(username), str(password))
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.email}, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+    return _token_response_for_user(user)
 
 
 @router.get("/me", response_model=UserResponse)
