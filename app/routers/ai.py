@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, Response
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, AIImageLog, Order, OrderStatus, Attendance, AttendanceStatus, Inventory
@@ -10,6 +10,7 @@ from app.image_storage import (
     persist_image_bytes,
     persist_image_from_url,
     local_static_dir,
+    delete_stored_image,
 )
 from openai import OpenAI
 import os
@@ -234,6 +235,33 @@ async def get_user_images(
     ).order_by(AIImageLog.created_at.desc()).offset(skip).limit(limit).all()
     
     return images
+
+
+@router.delete("/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_ai_image(
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete an AI image. Owners only; admins may delete any user's image."""
+    image_log = db.query(AIImageLog).filter(AIImageLog.image_id == image_id).first()
+    if not image_log:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image not found",
+        )
+
+    is_admin = current_user.role.value == "admin"
+    if image_log.user_id != current_user.id and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to delete this image",
+        )
+
+    delete_stored_image(image_log.generated_image_url)
+    db.delete(image_log)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/images/all", response_model=List[AIImageResponse])

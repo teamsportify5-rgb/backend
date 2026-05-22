@@ -56,5 +56,6 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    from app.image_storage import storage_status
+    return {"status": "healthy", **storage_status()}
 
