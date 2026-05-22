@@ -42,10 +42,9 @@ AZURE_OPENAI_API_VERSION=2025-04-01-preview
 
 ### Image Storage
 
-- Generated images are saved to: `backend/static/images/ai-generated/`
-- Filename format: `ai_image_{user_id}_{timestamp}.png`
-- Images are accessible via: `http://localhost:8000/static/images/ai-generated/{filename}`
-- Frontend automatically prepends the API base URL for relative paths
+- Production: **Vercel Blob** or **Supabase Storage** (see `IMAGE_STORAGE_SETUP.md`)
+- Local dev without cloud env: `backend/static/images/ai-generated/` served at `/static/...`
+- API returns a **public HTTPS URL** in `generated_image_url` when cloud storage is configured
 
 ## API Endpoints
 
@@ -96,6 +95,5 @@ Authorization: Bearer {token}
 ## Notes
 
 - The system automatically falls back to other methods if Azure GPT Image 1 fails
-- Images are stored locally on the server
-- For production, consider using cloud storage (S3, Azure Blob, etc.)
-- The static file serving is suitable for development; use a CDN or cloud storage for production
+- Configure `BLOB_READ_WRITE_TOKEN` (Vercel) or Supabase Storage env vars for production persistence
+- Local static files are ephemeral on Vercel serverless without cloud storage

@@ -1,17 +1,20 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from app.database import get_db
 from app.models import User, AIImageLog, Order, OrderStatus, Attendance, AttendanceStatus, Inventory
 from app.schemas import AIImageResponse
 from app.auth import get_current_user
-from openai import OpenAI, AzureOpenAI
+from app.image_storage import (
+    persist_generation_result,
+    persist_image_bytes,
+    persist_image_from_url,
+    local_static_dir,
+)
+from openai import OpenAI
 import os
-import base64
 import requests
-from datetime import datetime, date
-from pathlib import Path
+from datetime import date
 from dotenv import load_dotenv
 from PIL import Image
 import io
@@ -19,10 +22,6 @@ import io
 load_dotenv()
 
 router = APIRouter()
-
-# Create static images directory (use /tmp on Vercel - ephemeral)
-STATIC_IMAGES_DIR = Path("/tmp/static/images/ai-generated") if os.getenv("VERCEL") else Path("static/images/ai-generated")
-STATIC_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_azure_gpt_image_config():
     """Get Azure OpenAI GPT Image 1 API configuration"""
@@ -103,67 +102,86 @@ def generate_azure_gpt_image(prompt: str, config: dict) -> str:
     
     raise ValueError("Invalid response format from Azure GPT Image API")
 
-def save_base64_image(base64_data: str, user_id: int) -> str:
-    """Save base64 image to disk and return the relative URL"""
-    # Generate unique filename
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"ai_image_{user_id}_{timestamp}.png"
-    filepath = STATIC_IMAGES_DIR / filename
-    
-    # Decode and save
-    image_bytes = base64.b64decode(base64_data)
-    with open(filepath, "wb") as f:
-        f.write(image_bytes)
-    
-    # Return relative URL path (frontend will prepend API base URL)
-    return f"/static/images/ai-generated/{filename}"
-
-def get_full_image_url(relative_url: str) -> str:
-    """Convert relative URL to full URL if needed"""
-    # If it's already a full URL (starts with http), return as is
-    if relative_url.startswith("http://") or relative_url.startswith("https://"):
-        return relative_url
-    
-    # Otherwise, return relative URL (frontend will handle prepending API base URL)
-    return relative_url
+def _load_image_bytes(image_url: str) -> bytes:
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        resp = requests.get(image_url, timeout=60)
+        resp.raise_for_status()
+        return resp.content
+    filename = image_url.split("/")[-1]
+    return (local_static_dir() / filename).read_bytes()
 
 
-def download_image_to_static(url: str, user_id: int) -> str:
-    """Download image from URL to static folder and return relative URL."""
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"ai_image_{user_id}_{timestamp}.png"
-    filepath = STATIC_IMAGES_DIR / filename
-    with open(filepath, "wb") as f:
-        f.write(resp.content)
-    return f"/static/images/ai-generated/{filename}"
-
-
-def overlay_logo_on_image(base_image_path: Path, logo_bytes: bytes, user_id: int) -> str:
-    """
-    Overlay logo on top-center of the base image. Logo is scaled to max 25% of base width.
-    Returns relative URL of the new image.
-    """
-    base_img = Image.open(base_image_path).convert("RGBA")
+def overlay_logo_on_bytes(base_bytes: bytes, logo_bytes: bytes) -> bytes:
+    """Overlay logo on top-center; returns PNG bytes."""
+    base_img = Image.open(io.BytesIO(base_bytes)).convert("RGBA")
     logo_img = Image.open(io.BytesIO(logo_bytes)).convert("RGBA")
     w, h = base_img.size
-    # Scale logo to max 25% of base width, preserving aspect ratio
     max_logo_w = int(w * 0.25)
     ratio = min(max_logo_w / logo_img.width, 1.0)
     new_lw = int(logo_img.width * ratio)
     new_lh = int(logo_img.height * ratio)
     logo_resized = logo_img.resize((new_lw, new_lh), Image.Resampling.LANCZOS)
-    # Position: top-center with a small margin
     margin = int(min(w, h) * 0.02)
     x = (w - new_lw) // 2
     y = margin
     base_img.paste(logo_resized, (x, y), logo_resized)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"ai_image_{user_id}_{timestamp}_with_logo.png"
-    out_path = STATIC_IMAGES_DIR / filename
-    base_img.convert("RGB").save(out_path, "PNG")
-    return f"/static/images/ai-generated/{filename}"
+    out = io.BytesIO()
+    base_img.convert("RGB").save(out, "PNG")
+    return out.getvalue()
+
+
+def generate_image_for_prompt(prompt: str, user_id: int) -> str:
+    """Generate via Azure GPT Image 1 or OpenAI DALL-E; persist to configured storage."""
+    azure_gpt_config = get_azure_gpt_image_config()
+    if azure_gpt_config:
+        try:
+            result = generate_azure_gpt_image(prompt, azure_gpt_config)
+            return persist_generation_result(result, user_id)
+        except requests.exceptions.HTTPError as e:
+            error_detail = e.response.text if hasattr(e, "response") and e.response is not None else str(e)
+            print(f"Azure GPT Image 1 API failed: {error_detail}")
+        except Exception as e:
+            print(f"Azure GPT Image 1 API failed: {e}")
+
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if openai_api_key and not os.getenv("AZURE_OPENAI_ENDPOINT"):
+        try:
+            client = OpenAI(api_key=openai_api_key)
+            response = client.images.generate(
+                model="dall-e-2",
+                prompt=prompt,
+                n=1,
+                size="1024x1024",
+            )
+            item = response.data[0]
+            if getattr(item, "url", None):
+                return persist_image_from_url(item.url, user_id)
+            if getattr(item, "b64_json", None):
+                return persist_generation_result(item.b64_json, user_id)
+        except Exception as e:
+            print(f"OpenAI SDK fallback failed: {e}")
+
+    openai_client, _, model_name = get_openai_client()
+    if openai_client:
+        try:
+            response = openai_client.images.generate(
+                model=model_name,
+                prompt=prompt,
+                n=1,
+                size="1024x1024",
+            )
+            item = response.data[0]
+            if getattr(item, "url", None):
+                return persist_image_from_url(item.url, user_id)
+            if getattr(item, "b64_json", None):
+                return persist_generation_result(item.b64_json, user_id)
+        except Exception as e:
+            print(f"OpenAI SDK failed: {e}")
+
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="No AI image generation service configured. Set Azure OpenAI or OPENAI_API_KEY.",
+    )
 
 
 @router.post("/image", response_model=AIImageResponse, status_code=status.HTTP_201_CREATED)
@@ -174,71 +192,19 @@ async def generate_ai_image(
     current_user: User = Depends(get_current_user)
 ):
     """Generate an AI image and optionally overlay an uploaded logo on top."""
-    image_url = None
-    
     try:
-        # Priority 1: Try Azure OpenAI GPT Image 1 API (new API)
-        azure_gpt_config = get_azure_gpt_image_config()
-        if azure_gpt_config:
-            try:
-                base64_image = generate_azure_gpt_image(prompt, azure_gpt_config)
-                # Save base64 image to disk
-                image_url = save_base64_image(base64_image, current_user.id)
-            except requests.exceptions.HTTPError as e:
-                error_detail = str(e)
-                if hasattr(e.response, 'text'):
-                    error_detail = e.response.text
-                print(f"Azure GPT Image 1 API failed: {error_detail}")
-            except Exception as e:
-                print(f"Azure GPT Image 1 API failed: {e}")
-        
-        # Priority 2: Try standard OpenAI SDK (DALL-E via SDK) - only if no Azure endpoint conflict
-        if not image_url:
-            OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-            # Only use standard OpenAI if we have the key and no Azure endpoint to avoid conflicts
-            if OPENAI_API_KEY and not os.getenv("AZURE_OPENAI_ENDPOINT"):
-                try:
-                    client = OpenAI(api_key=OPENAI_API_KEY)
-                    response = client.images.generate(
-                        model="dall-e-2",
-                        prompt=prompt,
-                        n=1,
-                        size="1024x1024"
-                    )
-                    if hasattr(response.data[0], 'url') and response.data[0].url:
-                        image_url = response.data[0].url
-                    elif hasattr(response.data[0], 'b64_json') and response.data[0].b64_json:
-                        image_url = save_base64_image(response.data[0].b64_json, current_user.id)
-                except Exception as e:
-                    print(f"OpenAI SDK fallback failed: {e}")
-        
-        if not image_url:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="No AI image generation service configured. Please set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY for GPT Image 1, or OPENAI_API_KEY for DALL-E."
-            )
-        
-        # If user uploaded a logo, overlay it on the generated image
+        image_url = generate_image_for_prompt(prompt, current_user.id)
+
         if logo and logo.filename and logo.content_type and logo.content_type.startswith("image/"):
             logo_bytes = await logo.read()
             if logo_bytes:
-                # If image_url is a remote URL, download to static first
-                if image_url.startswith("http://") or image_url.startswith("https://"):
-                    image_url = download_image_to_static(image_url, current_user.id)
-                # Resolve path: image_url is like /static/images/ai-generated/xxx.png
-                base_filename = image_url.split("/")[-1]
-                base_path = STATIC_IMAGES_DIR / base_filename
-                if base_path.exists():
-                    image_url = overlay_logo_on_image(base_path, logo_bytes, current_user.id)
-        
-        # Ensure we have a valid image URL
-        final_image_url = get_full_image_url(image_url)
-        
-        # Save to database
+                merged = overlay_logo_on_bytes(_load_image_bytes(image_url), logo_bytes)
+                image_url = persist_image_bytes(merged, current_user.id, suffix="with_logo")
+
         image_log = AIImageLog(
             user_id=current_user.id,
             prompt_text=prompt,
-            generated_image_url=final_image_url
+            generated_image_url=image_url
         )
         db.add(image_log)
         db.commit()
@@ -343,43 +309,7 @@ Today's Attendance:
 
 Design a modern, clean infographic with charts, icons, and visual elements showing these Sportify performance metrics. Use a professional color scheme with clear labels and numbers."""
         
-        # Generate image using existing function
-        image_url = None
-        
-        # Try Azure GPT Image 1 API first
-        azure_gpt_config = get_azure_gpt_image_config()
-        if azure_gpt_config:
-            try:
-                base64_image = generate_azure_gpt_image(prompt, azure_gpt_config)
-                image_url = save_base64_image(base64_image, current_user.id)
-            except Exception as e:
-                print(f"Azure GPT Image 1 API failed: {e}")
-        
-        # Fallback to OpenAI SDK
-        if not image_url:
-            openai_client, use_azure, model_name = get_openai_client()
-            if openai_client:
-                try:
-                    response = openai_client.images.generate(
-                        model=model_name,
-                        prompt=prompt,
-                        n=1,
-                        size="1024x1024"
-                    )
-                    if hasattr(response.data[0], 'url') and response.data[0].url:
-                        image_url = response.data[0].url
-                    elif hasattr(response.data[0], 'b64_json') and response.data[0].b64_json:
-                        image_url = save_base64_image(response.data[0].b64_json, current_user.id)
-                except Exception as e:
-                    print(f"OpenAI SDK failed: {e}")
-        
-        if not image_url:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="No AI image generation service configured."
-            )
-        
-        # Save to database
+        image_url = generate_image_for_prompt(prompt, current_user.id)
         image_log = AIImageLog(
             user_id=current_user.id,
             prompt_text=prompt,
@@ -458,43 +388,7 @@ Low Stock Alert Items:
 
 Design a modern, clean infographic with charts, icons, and visual elements showing these inventory and stock metrics. Include warning indicators for low stock items. Use a professional color scheme with clear labels and numbers."""
         
-        # Generate image using existing function
-        image_url = None
-        
-        # Try Azure GPT Image 1 API first
-        azure_gpt_config = get_azure_gpt_image_config()
-        if azure_gpt_config:
-            try:
-                base64_image = generate_azure_gpt_image(prompt, azure_gpt_config)
-                image_url = save_base64_image(base64_image, current_user.id)
-            except Exception as e:
-                print(f"Azure GPT Image 1 API failed: {e}")
-        
-        # Fallback to OpenAI SDK
-        if not image_url:
-            openai_client, use_azure, model_name = get_openai_client()
-            if openai_client:
-                try:
-                    response = openai_client.images.generate(
-                        model=model_name,
-                        prompt=prompt,
-                        n=1,
-                        size="1024x1024"
-                    )
-                    if hasattr(response.data[0], 'url') and response.data[0].url:
-                        image_url = response.data[0].url
-                    elif hasattr(response.data[0], 'b64_json') and response.data[0].b64_json:
-                        image_url = save_base64_image(response.data[0].b64_json, current_user.id)
-                except Exception as e:
-                    print(f"OpenAI SDK failed: {e}")
-        
-        if not image_url:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="No AI image generation service configured."
-            )
-        
-        # Save to database
+        image_url = generate_image_for_prompt(prompt, current_user.id)
         image_log = AIImageLog(
             user_id=current_user.id,
             prompt_text=prompt,
