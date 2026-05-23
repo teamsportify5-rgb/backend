@@ -24,6 +24,14 @@ wheels/
 .env
 .venv
 
-
-
+# Local setup docs (keep on disk, not in repo)
+AZURE_OPENAI_SETUP.md
+DATABASE_FIX.md
+ENV_SETUP_GUIDE.md
+FIX_ENV.md
+IMAGE_STORAGE_SETUP.md
+INSTALL.md
+MYSQL_SETUP.md
+PYTHON_SETUP.md
+SUPABASE_SETUP.md
 
