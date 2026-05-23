@@ -4,6 +4,7 @@ Set IMAGE_STORAGE_PROVIDER=vercel|supabase|local, or leave unset for auto-detect
 """
 from __future__ import annotations
 
+import base64
 import logging
 import os
 from datetime import datetime
