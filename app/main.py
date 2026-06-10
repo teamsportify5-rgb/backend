@@ -57,5 +57,27 @@ async def root():
 @app.get("/health")
 async def health_check():
     from app.image_storage import storage_status
-    return {"status": "healthy", **storage_status()}
+    from app.firebase_app import firebase_status
+    from app.database import SessionLocal
+    from app.models import User
+
+    push = firebase_status()
+    db = SessionLocal()
+    try:
+        registered_tokens = db.query(User).filter(User.fcm_token.isnot(None)).count()
+    finally:
+        db.close()
+
+    status = "healthy"
+    warning = None
+    if not push.get("ready"):
+        status = "degraded"
+        warning = "Push notifications unavailable — regenerate Firebase service account key"
+
+    return {
+        "status": status,
+        **storage_status(),
+        "push_notifications": {**push, "registered_devices": registered_tokens},
+        "warning": warning,
+    }
 

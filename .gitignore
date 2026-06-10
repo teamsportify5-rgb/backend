@@ -23,6 +23,8 @@ wheels/
 *.egg
 .env
 .venv
+firebase-service-account.json
+firebase-credentials-oneline.txt
 
 # Local setup docs (keep on disk, not in repo)
 AZURE_OPENAI_SETUP.md

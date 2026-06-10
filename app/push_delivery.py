@@ -41,5 +41,12 @@ def try_notify_user(
         send_notification_to_token(user.fcm_token, title, body, data)
         return True
     except Exception as e:
-        print(f"Push notification failed for user {getattr(user, 'id', '?')}: {e}")
+        err = str(e)
+        if "invalid_grant" in err or "Invalid JWT Signature" in err:
+            print(
+                "Push notification failed: Firebase service account key is invalid or revoked. "
+                "Regenerate the key in Firebase Console and update FIREBASE_CREDENTIALS_JSON."
+            )
+        else:
+            print(f"Push notification failed for user {getattr(user, 'id', '?')}: {e}")
         return False
