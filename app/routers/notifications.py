@@ -116,7 +116,8 @@ async def notify_all(
                 data=ensure_string_data(notification.data),
                 tokens=batch,
             )
-            response = messaging.send_multicast(message)
+            # send_multicast uses deprecated FCM /batch (404); send_each_for_multicast uses HTTP v1
+            response = messaging.send_each_for_multicast(message)
             total_success += response.success_count
 
         return NotificationResponse(
