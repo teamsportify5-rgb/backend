@@ -12,7 +12,7 @@ from app.image_storage import (
     local_static_dir,
     delete_stored_image,
 )
-from openai import OpenAI
+from app.garment_prompt import validate_garment_prompt, wrap_garment_prompt
 import os
 import requests
 from datetime import date
@@ -131,12 +131,13 @@ def overlay_logo_on_bytes(base_bytes: bytes, logo_bytes: bytes) -> bytes:
     return out.getvalue()
 
 
-def generate_image_for_prompt(prompt: str, user_id: int) -> str:
+def generate_image_for_prompt(prompt: str, user_id: int, *, skip_validation: bool = False) -> str:
     """Generate via Azure GPT Image 1 or OpenAI DALL-E; persist to configured storage."""
+    garment_prompt = wrap_garment_prompt(prompt, skip_validation=skip_validation)
     azure_gpt_config = get_azure_gpt_image_config()
     if azure_gpt_config:
         try:
-            result = generate_azure_gpt_image(prompt, azure_gpt_config)
+            result = generate_azure_gpt_image(garment_prompt, azure_gpt_config)
             return persist_generation_result(result, user_id)
         except requests.exceptions.HTTPError as e:
             error_detail = e.response.text if hasattr(e, "response") and e.response is not None else str(e)
@@ -150,7 +151,7 @@ def generate_image_for_prompt(prompt: str, user_id: int) -> str:
             client = OpenAI(api_key=openai_api_key)
             response = client.images.generate(
                 model="dall-e-2",
-                prompt=prompt,
+                prompt=garment_prompt,
                 n=1,
                 size="1024x1024",
             )
@@ -167,7 +168,7 @@ def generate_image_for_prompt(prompt: str, user_id: int) -> str:
         try:
             response = openai_client.images.generate(
                 model=model_name,
-                prompt=prompt,
+                prompt=garment_prompt,
                 n=1,
                 size="1024x1024",
             )
@@ -194,6 +195,7 @@ async def generate_ai_image(
 ):
     """Generate an AI image and optionally overlay an uploaded logo on top."""
     try:
+        validate_garment_prompt(prompt)
         image_url = generate_image_for_prompt(prompt, current_user.id)
 
         if logo and logo.filename and logo.content_type and logo.content_type.startswith("image/"):
@@ -318,9 +320,9 @@ async def generate_performance_summary(
         completion_rate = (completed_orders / total_orders * 100) if total_orders > 0 else 0
         
         # Construct intelligent prompt
-        prompt = f"""Create a professional Sportify performance summary infographic with the following data:
+        prompt = f"""Create a professional garment manufacturing factory performance infographic with the following data:
         
-Sportify Performance Dashboard:
+Garment Factory Performance Dashboard:
 - Total Orders: {total_orders}
   * Pending: {pending_orders}
   * In Progress: {in_progress_orders}
@@ -335,9 +337,9 @@ Today's Attendance:
   * Late: {late_count}
 - Attendance Rate: {attendance_rate:.1f}%
 
-Design a modern, clean infographic with charts, icons, and visual elements showing these Sportify performance metrics. Use a professional color scheme with clear labels and numbers."""
+Design a modern, clean garment/apparel factory infographic with charts, clothing icons, fabric rolls, and stitching visuals showing these metrics. Use a professional color scheme with clear labels and numbers. Garments and textile manufacturing theme only."""
         
-        image_url = generate_image_for_prompt(prompt, current_user.id)
+        image_url = generate_image_for_prompt(prompt, current_user.id, skip_validation=True)
         image_log = AIImageLog(
             user_id=current_user.id,
             prompt_text=prompt,
@@ -401,9 +403,9 @@ async def generate_stock_summary(
         total_quantity = sum(item.quantity for item in all_items)
         
         # Construct intelligent prompt
-        prompt = f"""Create a professional stock and inventory summary infographic with the following data:
+        prompt = f"""Create a professional garment factory stock and textile inventory summary infographic with the following data:
         
-Inventory Overview:
+Garment Inventory Overview:
 - Total Items: {total_items}
 - Total Quantity: {total_quantity} units
 - Low Stock Items: {low_stock_count} items need restocking
@@ -414,9 +416,9 @@ Top Categories:
 Low Stock Alert Items:
 {chr(10).join([f"- {item}" for item in low_stock_details[:5]])}
 
-Design a modern, clean infographic with charts, icons, and visual elements showing these inventory and stock metrics. Include warning indicators for low stock items. Use a professional color scheme with clear labels and numbers."""
+Design a modern, clean garment manufacturing infographic with fabric rolls, apparel boxes, clothing tags, and inventory charts. Include warning indicators for low stock textile/garment materials. Garments and textile theme only. Use a professional color scheme with clear labels and numbers."""
         
-        image_url = generate_image_for_prompt(prompt, current_user.id)
+        image_url = generate_image_for_prompt(prompt, current_user.id, skip_validation=True)
         image_log = AIImageLog(
             user_id=current_user.id,
             prompt_text=prompt,

@@ -50,3 +50,17 @@ def try_notify_user(
         else:
             print(f"Push notification failed for user {getattr(user, 'id', '?')}: {e}")
         return False
+
+
+def notify_users_with_role(
+    users: list,
+    title: str,
+    body: str,
+    data: Optional[dict] = None,
+) -> int:
+    """Notify a list of users; returns count of successful pushes."""
+    sent = 0
+    for user in users:
+        if try_notify_user(user, title, body, data):
+            sent += 1
+    return sent

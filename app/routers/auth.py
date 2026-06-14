@@ -3,9 +3,13 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import func
 from app.database import get_db
-from app.models import User
-from app.schemas import UserCreate, UserUpdate, UserResponse, Token, LoginRequest, FCMTokenRequest
+from app.models import User, UserRole
+from app.schemas import UserCreate, UserUpdate, UserResponse, Token, LoginRequest, FCMTokenRequest, PasswordResetRequest, PasswordResetResponse, PasswordResetRequestInput, PasswordResetRequestAck
+from app.push_delivery import try_notify_user, notify_users_with_role
+import secrets
+import string
 from app.auth import (
     get_password_hash,
     authenticate_user,
@@ -15,6 +19,11 @@ from app.auth import (
 )
 
 router = APIRouter()
+
+
+def _generate_temp_password(length: int = 10) -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -103,6 +112,39 @@ async def login(request: Request, db: Session = Depends(get_db)):
             headers={"WWW-Authenticate": "Bearer"},
         )
     return _token_response_for_user(user)
+
+
+@router.post("/request-password-reset", response_model=PasswordResetRequestAck)
+async def request_password_reset(
+    body: PasswordResetRequestInput,
+    db: Session = Depends(get_db),
+):
+    """
+    Public endpoint: user requests a password reset. Notifies all admins via push (free).
+    Always returns the same message whether or not the email exists (privacy).
+    """
+    email = str(body.email).strip().lower()
+    user = db.query(User).filter(func.lower(User.email) == email).first()
+
+    if user:
+        admins = (
+            db.query(User)
+            .filter(User.role == UserRole.ADMIN, User.fcm_token.isnot(None))
+            .all()
+        )
+        notify_users_with_role(
+            admins,
+            title="Password reset requested",
+            body=f"{user.name} ({user.email}) requested a password reset. Open User Management to reset their password.",
+            data={"type": "password_reset_request", "user_id": str(user.id), "email": user.email},
+        )
+
+    return PasswordResetRequestAck(
+        message=(
+            "Your request has been submitted. If an account exists for this email, "
+            "an administrator will be notified and will reset your password."
+        )
+    )
 
 
 @router.get("/me", response_model=UserResponse)
@@ -209,6 +251,56 @@ async def update_user(
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/users/{user_id}/reset-password", response_model=PasswordResetResponse)
+async def reset_user_password(
+    user_id: int,
+    body: PasswordResetRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Admin resets a user's password and optionally notifies them via push (free, no email service)."""
+    if current_user.role.value != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin can reset passwords",
+        )
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    new_password = (body.new_password or "").strip() or _generate_temp_password()
+    if len(new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 6 characters",
+        )
+
+    user.password_hash = get_password_hash(new_password)
+    db.commit()
+
+    notified = False
+    if body.notify:
+        notified = try_notify_user(
+            user,
+            title="Password reset",
+            body=f"Your Sportify password was reset by admin. New password: {new_password}",
+            data={"type": "password_reset"},
+        )
+
+    return PasswordResetResponse(
+        message=(
+            f"Password reset for {user.name}. "
+            + ("User notified via push notification." if notified else "Push notification not sent (user may not have the mobile app registered).")
+        ),
+        new_password=new_password,
+        notified=notified,
+    )
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

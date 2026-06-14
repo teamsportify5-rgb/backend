@@ -53,6 +53,25 @@ class FCMTokenRequest(BaseModel):
     fcm_token: str
 
 
+class PasswordResetRequest(BaseModel):
+    new_password: Optional[str] = None
+    notify: bool = True
+
+
+class PasswordResetResponse(BaseModel):
+    message: str
+    new_password: str
+    notified: bool
+
+
+class PasswordResetRequestInput(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetRequestAck(BaseModel):
+    message: str
+
+
 # Order Schemas
 class OrderBase(BaseModel):
     product: str
