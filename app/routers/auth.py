@@ -11,7 +11,6 @@ from app.schemas import (
     PasswordResetRequest, PasswordResetResponse, PasswordResetRequestInput,
     PasswordResetRequestAck, ChangePasswordRequest,
 )
-from app.email_validation import validate_company_email
 from app.notification_history import notify_user_and_record, record_notification
 from app.auth import (
     get_password_hash,
@@ -100,7 +99,6 @@ async def login(request: Request, db: Session = Depends(get_db)):
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail='Expected JSON: {"email":"you@example.com","password":"..."}',
             )
-        validate_company_email(str(login_data.email))
         user = authenticate_user(db, str(login_data.email), login_data.password)
     else:
         form = await request.form()
@@ -111,7 +109,6 @@ async def login(request: Request, db: Session = Depends(get_db)):
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Send JSON {email,password} or form fields username (email) and password",
             )
-        validate_company_email(str(username))
         user = authenticate_user(db, str(username), str(password))
 
     if not user:

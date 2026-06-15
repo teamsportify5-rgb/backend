@@ -13,15 +13,15 @@ class UserBase(BaseModel):
     phone: Optional[str] = None
     daily_rate: Optional[float] = None
 
+
+class UserCreate(UserBase):
+    password: str = Field(min_length=6)
+
     @field_validator("email")
     @classmethod
     def validate_email_domain(cls, v: EmailStr) -> EmailStr:
         assert_company_email(str(v))
         return v
-
-
-class UserCreate(UserBase):
-    password: str = Field(min_length=6)
 
 
 class UserUpdate(BaseModel):
@@ -31,13 +31,6 @@ class UserUpdate(BaseModel):
     phone: Optional[str] = None
     password: Optional[str] = None
     daily_rate: Optional[float] = None
-
-    @field_validator("email")
-    @classmethod
-    def validate_email_domain(cls, v: Optional[EmailStr]) -> Optional[EmailStr]:
-        if v is not None:
-            assert_company_email(str(v))
-        return v
 
 
 class UserResponse(UserBase):

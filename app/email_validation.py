@@ -12,7 +12,7 @@ def assert_company_email(email: str) -> str:
     domain = normalized.rsplit("@", 1)[1]
     if domain not in ALLOWED_EMAIL_DOMAINS:
         raise ValueError(
-            "Only @sportify.com company emails are allowed. "
+            "New users must use a @sportify.com email address. "
             "Personal addresses like @gmail.com cannot be used."
         )
     return normalized
