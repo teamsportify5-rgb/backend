@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, Float, Date, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, Float, Date, Text, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -38,6 +38,7 @@ class User(Base):
     fcm_token = Column(String(500), nullable=True)  # Firebase Cloud Messaging token for push notifications
     # Salary settings (can be set by admin)
     daily_rate = Column(Float, nullable=True)  # Daily salary rate
+    must_change_password = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -45,6 +46,28 @@ class User(Base):
     attendance_records = relationship("Attendance", back_populates="employee")
     payroll_records = relationship("Payroll", back_populates="employee")
     ai_image_logs = relationship("AIImageLog", back_populates="user")
+    notifications_received = relationship(
+        "NotificationLog",
+        back_populates="recipient",
+        foreign_keys="NotificationLog.user_id",
+    )
+
+
+class NotificationLog(Base):
+    __tablename__ = "notification_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    sent_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    title = Column(String(200), nullable=False)
+    body = Column(Text, nullable=False)
+    notification_type = Column(String(50), nullable=False, default="general")
+    data_json = Column(Text, nullable=True)
+    is_read = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    recipient = relationship("User", foreign_keys=[user_id], back_populates="notifications_received")
+    sender = relationship("User", foreign_keys=[sent_by_user_id])
 
 
 class Order(Base):
@@ -103,6 +126,7 @@ class Inventory(Base):
     quantity = Column(Integer, nullable=False, default=0)
     threshold = Column(Integer, nullable=False, default=0)
     unit = Column(String(50), nullable=False, default="pieces")
+    unit_price = Column(Float, nullable=False, default=0.0)  # Cost per unit (Rs) for stock valuation
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

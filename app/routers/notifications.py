@@ -1,14 +1,16 @@
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from firebase_admin import messaging
 
 from app.database import get_db
-from app.models import User
+from app.models import User, NotificationLog
+from app.schemas import NotificationLogResponse
 from app.auth import get_current_user
 from app.firebase_app import ensure_firebase_initialized
 from app.push_delivery import ensure_string_data, send_notification_to_token
+from app.notification_history import record_notification, notify_user_and_record
 
 router = APIRouter()
 
@@ -35,6 +37,64 @@ def _send_token_or_http(fcm_token: str, title: str, body: str, data: Optional[di
         ) from e
 
 
+@router.get("/history", response_model=List[NotificationLogResponse])
+async def get_notification_history(
+    scope: str = Query("mine", description="'mine' or 'all' (admin only)"),
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Notification inbox. Users see their own; admin can list all."""
+    query = db.query(NotificationLog)
+    if scope == "all":
+        if current_user.role.value != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admin can view all notification history",
+            )
+    else:
+        query = query.filter(NotificationLog.user_id == current_user.id)
+
+    return (
+        query.order_by(NotificationLog.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+
+@router.patch("/history/{notification_id}/read", response_model=NotificationLogResponse)
+async def mark_notification_read(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    log = db.query(NotificationLog).filter(NotificationLog.id == notification_id).first()
+    if not log:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+    if log.user_id != current_user.id and current_user.role.value != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed")
+    log.is_read = True
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+@router.patch("/history/read-all")
+async def mark_all_notifications_read(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    updated = (
+        db.query(NotificationLog)
+        .filter(NotificationLog.user_id == current_user.id, NotificationLog.is_read.is_(False))
+        .update({NotificationLog.is_read: True})
+    )
+    db.commit()
+    return {"message": f"Marked {updated} notification(s) as read"}
+
+
 @router.post("/user/{user_id}", response_model=NotificationResponse)
 async def notify_user(
     user_id: int,
@@ -56,22 +116,27 @@ async def notify_user(
             detail="User not found",
         )
 
+    notify_user_and_record(
+        db,
+        target_user,
+        title=notification.title,
+        body=notification.body,
+        notification_type="general",
+        sent_by_user_id=current_user.id,
+        data=notification.data,
+    )
+
     if not target_user.fcm_token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"User {target_user.name} has not registered for push notifications",
+        return NotificationResponse(
+            success=True,
+            message=f"Notification saved for {target_user.name} (no push token registered)",
+            message_id=None,
         )
 
-    msg_id = _send_token_or_http(
-        target_user.fcm_token,
-        notification.title,
-        notification.body,
-        notification.data,
-    )
     return NotificationResponse(
         success=True,
         message=f"Notification sent to {target_user.name}",
-        message_id=msg_id,
+        message_id=None,
     )
 
 
@@ -88,12 +153,24 @@ async def notify_all(
             detail="Only admin can send notifications to all users",
         )
 
-    tokens = [u.fcm_token for u in db.query(User).filter(User.fcm_token.is_not(None)).all()]
+    all_users = db.query(User).all()
+    for u in all_users:
+        record_notification(
+            db,
+            user_id=u.id,
+            title=notification.title,
+            body=notification.body,
+            notification_type="general",
+            sent_by_user_id=current_user.id,
+            data=notification.data,
+        )
+
+    tokens = [u.fcm_token for u in all_users if u.fcm_token]
 
     if not tokens:
         return NotificationResponse(
             success=True,
-            message="No users have registered for push notifications",
+            message="Notification saved for all users (no push tokens registered)",
             message_id=None,
         )
 
@@ -116,13 +193,12 @@ async def notify_all(
                 data=ensure_string_data(notification.data),
                 tokens=batch,
             )
-            # send_multicast uses deprecated FCM /batch (404); send_each_for_multicast uses HTTP v1
             response = messaging.send_each_for_multicast(message)
             total_success += response.success_count
 
         return NotificationResponse(
             success=True,
-            message=f"Notification sent to {total_success} users",
+            message=f"Notification saved for all users; push sent to {total_success} devices",
             message_id=None,
         )
     except Exception as e:

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Order, OrderStatus, User
 from app.push_delivery import try_notify_user
+from app.notification_history import notify_user_and_record
 
 router = APIRouter(prefix="/internal/cron", tags=["Cron"])
 
@@ -64,11 +65,13 @@ def run_order_due_reminders(request: Request, db: Session = Depends(get_db)):
             continue
         days_left = (order.due_date - today).days
         body = f"{order.product} is due on {order.due_date} ({days_left} day(s) left)."
-        if try_notify_user(
+        if notify_user_and_record(
+            db,
             assignee,
-            "Order due soon",
-            body,
-            {
+            title="Order due soon",
+            body=body,
+            notification_type="order_due_soon",
+            data={
                 "type": "order_due_soon",
                 "order_id": str(order.order_id),
                 "due_date": str(order.due_date),

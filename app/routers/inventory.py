@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, Inventory
-from app.schemas import InventoryCreate, InventoryUpdate, InventoryResponse
+from app.schemas import InventoryCreate, InventoryUpdate, InventoryResponse, InventorySummaryResponse
 from app.auth import get_current_user
 
 router = APIRouter()
@@ -35,12 +35,29 @@ async def create_inventory_item(
         category=item_data.category,
         quantity=item_data.quantity,
         threshold=item_data.threshold,
-        unit=item_data.unit
+        unit=item_data.unit,
+        unit_price=item_data.unit_price,
     )
     db.add(new_item)
     db.commit()
     db.refresh(new_item)
     return new_item
+
+
+@router.get("/summary", response_model=InventorySummaryResponse)
+async def get_inventory_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stock summary: item count, low-stock alerts, and total estimated value (quantity × unit_price)."""
+    items = db.query(Inventory).all()
+    total_value = sum(item.quantity * (item.unit_price or 0) for item in items)
+    low_stock_count = sum(1 for item in items if item.quantity <= item.threshold)
+    return InventorySummaryResponse(
+        total_items=len(items),
+        low_stock_count=low_stock_count,
+        total_estimated_value=round(total_value, 2),
+    )
 
 
 @router.get("/", response_model=List[InventoryResponse])
@@ -122,6 +139,8 @@ async def update_inventory_item(
         item.threshold = item_data.threshold
     if item_data.unit is not None:
         item.unit = item_data.unit
+    if item_data.unit_price is not None:
+        item.unit_price = item_data.unit_price
     
     db.commit()
     db.refresh(item)

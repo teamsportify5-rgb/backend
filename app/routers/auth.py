@@ -6,17 +6,23 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func
 from app.database import get_db
 from app.models import User, UserRole
-from app.schemas import UserCreate, UserUpdate, UserResponse, Token, LoginRequest, FCMTokenRequest, PasswordResetRequest, PasswordResetResponse, PasswordResetRequestInput, PasswordResetRequestAck
-from app.push_delivery import try_notify_user, notify_users_with_role
-import secrets
-import string
+from app.schemas import (
+    UserCreate, UserUpdate, UserResponse, Token, LoginRequest, FCMTokenRequest,
+    PasswordResetRequest, PasswordResetResponse, PasswordResetRequestInput,
+    PasswordResetRequestAck, ChangePasswordRequest,
+)
+from app.email_validation import validate_company_email
+from app.notification_history import notify_user_and_record, record_notification
 from app.auth import (
     get_password_hash,
+    verify_password,
     authenticate_user,
     create_access_token,
     get_current_user,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
+import secrets
+import string
 
 router = APIRouter()
 
@@ -51,10 +57,11 @@ async def register(
     hashed_password = get_password_hash(user_data.password)
     new_user = User(
         name=user_data.name,
-        email=user_data.email,
+        email=str(user_data.email).lower(),
         password_hash=hashed_password,
         role=user_data.role,
-        phone=user_data.phone
+        phone=user_data.phone,
+        must_change_password=True,
     )
     db.add(new_user)
     db.commit()
@@ -93,6 +100,7 @@ async def login(request: Request, db: Session = Depends(get_db)):
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail='Expected JSON: {"email":"you@example.com","password":"..."}',
             )
+        validate_company_email(str(login_data.email))
         user = authenticate_user(db, str(login_data.email), login_data.password)
     else:
         form = await request.form()
@@ -103,6 +111,7 @@ async def login(request: Request, db: Session = Depends(get_db)):
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Send JSON {email,password} or form fields username (email) and password",
             )
+        validate_company_email(str(username))
         user = authenticate_user(db, str(username), str(password))
 
     if not user:
@@ -127,17 +136,16 @@ async def request_password_reset(
     user = db.query(User).filter(func.lower(User.email) == email).first()
 
     if user:
-        admins = (
-            db.query(User)
-            .filter(User.role == UserRole.ADMIN, User.fcm_token.isnot(None))
-            .all()
-        )
-        notify_users_with_role(
-            admins,
-            title="Password reset requested",
-            body=f"{user.name} ({user.email}) requested a password reset. Open User Management to reset their password.",
-            data={"type": "password_reset_request", "user_id": str(user.id), "email": user.email},
-        )
+        admins = db.query(User).filter(User.role == UserRole.ADMIN).all()
+        for admin in admins:
+            notify_user_and_record(
+                db,
+                admin,
+                title="Password reset requested",
+                body=f"{user.name} ({user.email}) requested a password reset. Open User Management to reset their password.",
+                notification_type="password_reset_request",
+                data={"type": "password_reset_request", "user_id": str(user.id), "email": user.email},
+            )
 
     return PasswordResetRequestAck(
         message=(
@@ -149,6 +157,31 @@ async def request_password_reset(
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
+@router.post("/change-password", response_model=UserResponse)
+async def change_password(
+    body: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """User changes their own password (required after admin reset)."""
+    if not verify_password(body.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+    if body.current_password == body.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from the current password",
+        )
+
+    current_user.password_hash = get_password_hash(body.new_password)
+    current_user.must_change_password = False
+    db.commit()
+    db.refresh(current_user)
     return current_user
 
 
@@ -235,7 +268,7 @@ async def update_user(
     if user_data.name is not None:
         user.name = user_data.name
     if user_data.email is not None:
-        user.email = user_data.email
+        user.email = str(user_data.email).lower()
     if user_data.role is not None:
         user.role = user_data.role
     if user_data.phone is not None:
@@ -247,6 +280,7 @@ async def update_user(
     # Update password if provided
     if user_data.password:
         user.password_hash = get_password_hash(user_data.password)
+        user.must_change_password = True
     
     db.commit()
     db.refresh(user)
@@ -282,15 +316,22 @@ async def reset_user_password(
         )
 
     user.password_hash = get_password_hash(new_password)
+    user.must_change_password = True
     db.commit()
 
     notified = False
     if body.notify:
-        notified = try_notify_user(
+        notified = notify_user_and_record(
+            db,
             user,
             title="Password reset",
-            body=f"Your Sportify password was reset by admin. New password: {new_password}",
-            data={"type": "password_reset"},
+            body=(
+                "Your Sportify password was reset by an administrator. "
+                "Sign in with the temporary password they provide, then you will be asked to set a new password."
+            ),
+            notification_type="password_reset",
+            sent_by_user_id=current_user.id,
+            data={"type": "password_reset", "must_change_password": "true"},
         )
 
     return PasswordResetResponse(

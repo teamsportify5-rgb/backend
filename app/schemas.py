@@ -1,7 +1,8 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator
 from typing import Optional
 from datetime import datetime, date
 from app.models import UserRole, OrderStatus, AttendanceStatus
+from app.email_validation import assert_company_email
 
 
 # User Schemas
@@ -12,9 +13,15 @@ class UserBase(BaseModel):
     phone: Optional[str] = None
     daily_rate: Optional[float] = None
 
+    @field_validator("email")
+    @classmethod
+    def validate_email_domain(cls, v: EmailStr) -> EmailStr:
+        assert_company_email(str(v))
+        return v
+
 
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(min_length=6)
 
 
 class UserUpdate(BaseModel):
@@ -23,11 +30,19 @@ class UserUpdate(BaseModel):
     role: Optional[UserRole] = None
     phone: Optional[str] = None
     password: Optional[str] = None
-    daily_rate: Optional[float] = None  # Daily salary rate
+    daily_rate: Optional[float] = None
+
+    @field_validator("email")
+    @classmethod
+    def validate_email_domain(cls, v: Optional[EmailStr]) -> Optional[EmailStr]:
+        if v is not None:
+            assert_company_email(str(v))
+        return v
 
 
 class UserResponse(UserBase):
     id: int
+    must_change_password: bool = False
     created_at: datetime
 
     class Config:
@@ -70,6 +85,25 @@ class PasswordResetRequestInput(BaseModel):
 
 class PasswordResetRequestAck(BaseModel):
     message: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=6)
+
+
+class NotificationLogResponse(BaseModel):
+    id: int
+    user_id: int
+    sent_by_user_id: Optional[int] = None
+    title: str
+    body: str
+    notification_type: str
+    is_read: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 # Order Schemas
@@ -166,9 +200,10 @@ class PayrollResponse(PayrollBase):
 class InventoryBase(BaseModel):
     item: str
     category: str
-    quantity: int
-    threshold: int
+    quantity: int = Field(ge=0)
+    threshold: int = Field(ge=0)
     unit: str = "pieces"
+    unit_price: float = Field(default=0.0, ge=0, description="Cost per unit in Rs")
 
 
 class InventoryCreate(InventoryBase):
@@ -178,9 +213,10 @@ class InventoryCreate(InventoryBase):
 class InventoryUpdate(BaseModel):
     item: Optional[str] = None
     category: Optional[str] = None
-    quantity: Optional[int] = None
-    threshold: Optional[int] = None
+    quantity: Optional[int] = Field(default=None, ge=0)
+    threshold: Optional[int] = Field(default=None, ge=0)
     unit: Optional[str] = None
+    unit_price: Optional[float] = Field(default=None, ge=0)
 
 
 class InventoryResponse(InventoryBase):
@@ -188,8 +224,19 @@ class InventoryResponse(InventoryBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
+    @computed_field
+    @property
+    def estimated_value(self) -> float:
+        return round(self.quantity * self.unit_price, 2)
+
     class Config:
         from_attributes = True
+
+
+class InventorySummaryResponse(BaseModel):
+    total_items: int
+    low_stock_count: int
+    total_estimated_value: float
 
 
 # AI Image Schemas
