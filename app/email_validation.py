@@ -1,7 +1,7 @@
 """Company email domain rules for Sportify factory accounts."""
 from fastapi import HTTPException, status
 
-ALLOWED_EMAIL_DOMAINS = frozenset({"sportify.com", "factory.com"})
+ALLOWED_EMAIL_DOMAINS = frozenset({"sportify.com"})
 
 
 def assert_company_email(email: str) -> str:
@@ -12,7 +12,7 @@ def assert_company_email(email: str) -> str:
     domain = normalized.rsplit("@", 1)[1]
     if domain not in ALLOWED_EMAIL_DOMAINS:
         raise ValueError(
-            "Only company emails are allowed (@sportify.com or @factory.com). "
+            "Only @sportify.com company emails are allowed. "
             "Personal addresses like @gmail.com cannot be used."
         )
     return normalized
