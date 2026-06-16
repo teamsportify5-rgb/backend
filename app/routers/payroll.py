@@ -15,6 +15,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from io import BytesIO
+from app.system_settings import get_tax_rate
 
 router = APIRouter()
 
@@ -122,7 +123,8 @@ async def generate_payroll(
     if payroll_data.deductions is not None:
         deductions = payroll_data.deductions
     else:
-        deductions = basic_salary * 0.1
+        tax_rate = get_tax_rate(db)
+        deductions = basic_salary * (tax_rate / 100.0)
 
     if payroll_data.bonus is not None:
         bonus = payroll_data.bonus

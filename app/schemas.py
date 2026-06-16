@@ -16,6 +16,7 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str = Field(min_length=6)
+    daily_rate: Optional[float] = Field(default=None, ge=0, description="Daily salary rate in Rs")
 
     @field_validator("email")
     @classmethod
@@ -30,7 +31,7 @@ class UserUpdate(BaseModel):
     role: Optional[UserRole] = None
     phone: Optional[str] = None
     password: Optional[str] = None
-    daily_rate: Optional[float] = None
+    daily_rate: Optional[float] = Field(default=None, ge=0)
 
 
 class UserResponse(UserBase):
@@ -102,17 +103,17 @@ class NotificationLogResponse(BaseModel):
 # Order Schemas
 class OrderBase(BaseModel):
     product: str
-    quantity: int
     due_date: Optional[date] = None
 
 
 class OrderCreate(OrderBase):
+    quantity: int = Field(ge=1, description="Number of units ordered")
     customer_id: int
 
 
 class OrderUpdate(BaseModel):
     product: Optional[str] = None
-    quantity: Optional[int] = None
+    quantity: Optional[int] = Field(default=None, ge=1)
     status: Optional[OrderStatus] = None
     due_date: Optional[date] = None
 
@@ -120,6 +121,7 @@ class OrderUpdate(BaseModel):
 class OrderResponse(OrderBase):
     order_id: int
     customer_id: int
+    quantity: int
     status: OrderStatus
     created_at: datetime
     due_reminder_sent_at: Optional[datetime] = None
@@ -165,18 +167,17 @@ class PayrollBase(BaseModel):
 
 class PayrollCreate(BaseModel):
     month: Optional[str] = None  # Format: "YYYY-MM"
-    # Optional manual override fields (for admin)
-    days_present: Optional[int] = None
-    basic_salary: Optional[float] = None
-    deductions: Optional[float] = None
-    bonus: Optional[float] = None
+    days_present: Optional[int] = Field(default=None, ge=0)
+    basic_salary: Optional[float] = Field(default=None, ge=0)
+    deductions: Optional[float] = Field(default=None, ge=0)
+    bonus: Optional[float] = Field(default=None, ge=0)
 
 
 class PayrollUpdate(BaseModel):
-    days_present: Optional[int] = None
-    basic_salary: Optional[float] = None
-    deductions: Optional[float] = None
-    bonus: Optional[float] = None
+    days_present: Optional[int] = Field(default=None, ge=0)
+    basic_salary: Optional[float] = Field(default=None, ge=0)
+    deductions: Optional[float] = Field(default=None, ge=0)
+    bonus: Optional[float] = Field(default=None, ge=0)
     # net_pay will be recalculated automatically
 
 
@@ -230,6 +231,19 @@ class InventorySummaryResponse(BaseModel):
     total_items: int
     low_stock_count: int
     total_estimated_value: float
+
+
+# System Settings Schemas
+class SystemSettingsResponse(BaseModel):
+    id: int
+    tax_rate: float = Field(ge=0, le=100, description="Payroll tax deduction percentage")
+
+    class Config:
+        from_attributes = True
+
+
+class SystemSettingsUpdate(BaseModel):
+    tax_rate: Optional[float] = Field(default=None, ge=0, le=100)
 
 
 # AI Image Schemas

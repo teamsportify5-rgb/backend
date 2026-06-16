@@ -142,3 +142,12 @@ class AIImageLog(Base):
 
     # Relationships
     user = relationship("User", back_populates="ai_image_logs")
+
+
+class SystemSettings(Base):
+    """Singleton row (id=1) for system-wide configuration."""
+
+    __tablename__ = "system_settings"
+
+    id = Column(Integer, primary_key=True, default=1)
+    tax_rate = Column(Float, nullable=False, default=10.0)  # Payroll tax deduction %
