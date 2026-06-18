@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func
 from app.database import get_db
-from app.models import User, UserRole
+from app.models import User, UserRole, Order, Attendance, Payroll, AIImageLog, NotificationLog
 from app.schemas import (
     UserCreate, UserUpdate, UserResponse, Token, LoginRequest, FCMTokenRequest,
     PasswordResetRequest, PasswordResetResponse, PasswordResetRequestInput,
@@ -31,6 +31,19 @@ def _generate_temp_password(length: int = 10) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+def _delete_user_dependencies(db: Session, user_id: int) -> None:
+    """Remove rows that reference this user so the user row can be deleted."""
+    db.query(Payroll).filter(Payroll.employee_id == user_id).delete(synchronize_session=False)
+    db.query(Attendance).filter(Attendance.employee_id == user_id).delete(synchronize_session=False)
+    db.query(Order).filter(Order.customer_id == user_id).delete(synchronize_session=False)
+    db.query(AIImageLog).filter(AIImageLog.user_id == user_id).delete(synchronize_session=False)
+    db.query(NotificationLog).filter(NotificationLog.user_id == user_id).delete(synchronize_session=False)
+    db.query(NotificationLog).filter(NotificationLog.sent_by_user_id == user_id).update(
+        {NotificationLog.sent_by_user_id: None},
+        synchronize_session=False,
+    )
+
+
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserCreate,
@@ -44,6 +57,12 @@ async def register(
             detail="Only admin can create users. Use User Management page."
         )
     
+    if user_data.role == UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot create admin users",
+        )
+
     # Check if user already exists
     existing_user = db.query(User).filter(User.email == user_data.email).first()
     if existing_user:
@@ -267,7 +286,19 @@ async def update_user(
     if user_data.email is not None:
         user.email = str(user_data.email).lower()
     if user_data.role is not None:
-        user.role = user_data.role
+        if user.role == UserRole.ADMIN:
+            if user_data.role != UserRole.ADMIN:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot change the admin role",
+                )
+        elif user_data.role == UserRole.ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot assign admin role",
+            )
+        else:
+            user.role = user_data.role
     if user_data.phone is not None:
         user.phone = user_data.phone
     if user_data.daily_rate is not None:
@@ -367,7 +398,22 @@ async def delete_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
-    db.delete(user)
-    db.commit()
+
+    if user.role == UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Admin accounts cannot be deleted",
+        )
+
+    try:
+        _delete_user_dependencies(db, user_id)
+        db.delete(user)
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not delete user because related records still exist. Try again or contact support.",
+        ) from exc
+
     return None
