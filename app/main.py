@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.database import engine, Base
-from app.routers import auth, orders, attendance, payroll, inventory, ai, notifications, cron, settings
+from app.routers import auth, orders, attendance, payroll, inventory, ai, notifications, cron, settings, tasks
 import os
 from pathlib import Path
 
@@ -35,6 +35,7 @@ app.add_middleware(
 # Include routers
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
+app.include_router(tasks.router, prefix="/tasks", tags=["Tasks"])
 app.include_router(attendance.router, prefix="/attendance", tags=["Attendance"])
 app.include_router(payroll.router, prefix="/payroll", tags=["Payroll"])
 app.include_router(inventory.router, prefix="/inventory", tags=["Inventory"])

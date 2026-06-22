@@ -1,7 +1,7 @@
 from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator
 from typing import Optional
 from datetime import datetime, date
-from app.models import UserRole, OrderStatus, AttendanceStatus
+from app.models import UserRole, OrderStatus, AttendanceStatus, TaskStatus, TaskPriority
 from app.email_validation import assert_company_email
 
 
@@ -86,6 +86,24 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=6)
 
 
+class ChangeEmailRequest(BaseModel):
+    new_email: EmailStr
+    password: str
+
+    @field_validator("new_email")
+    @classmethod
+    def validate_email_domain(cls, v: EmailStr) -> EmailStr:
+        assert_company_email(str(v))
+        return v
+
+
+class ChangeEmailResponse(BaseModel):
+    message: str
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
 class NotificationLogResponse(BaseModel):
     id: int
     user_id: int
@@ -125,6 +143,41 @@ class OrderResponse(OrderBase):
     status: OrderStatus
     created_at: datetime
     due_reminder_sent_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# Task Schemas
+class TaskBase(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = None
+    priority: TaskPriority = TaskPriority.MEDIUM
+    due_date: Optional[date] = None
+
+
+class TaskCreate(TaskBase):
+    assigned_to_id: int
+
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    assigned_to_id: Optional[int] = None
+    status: Optional[TaskStatus] = None
+    priority: Optional[TaskPriority] = None
+    due_date: Optional[date] = None
+
+
+class TaskResponse(TaskBase):
+    id: int
+    assigned_to_id: int
+    assigned_to_name: Optional[str] = None
+    assigned_by_id: Optional[int] = None
+    assigned_by_name: Optional[str] = None
+    status: TaskStatus
+    created_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

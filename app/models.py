@@ -26,6 +26,18 @@ class AttendanceStatus(str, enum.Enum):
     LATE = "late"
 
 
+class TaskStatus(str, enum.Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+
+
+class TaskPriority(str, enum.Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -50,6 +62,16 @@ class User(Base):
         "NotificationLog",
         back_populates="recipient",
         foreign_keys="NotificationLog.user_id",
+    )
+    tasks_assigned = relationship(
+        "Task",
+        back_populates="assignee",
+        foreign_keys="Task.assigned_to_id",
+    )
+    tasks_created = relationship(
+        "Task",
+        back_populates="assigner",
+        foreign_keys="Task.assigned_by_id",
     )
 
 
@@ -142,6 +164,24 @@ class AIImageLog(Base):
 
     # Relationships
     user = relationship("User", back_populates="ai_image_logs")
+
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    assigned_to_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    assigned_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    status = Column(Enum(TaskStatus), nullable=False, default=TaskStatus.PENDING)
+    priority = Column(Enum(TaskPriority), nullable=False, default=TaskPriority.MEDIUM)
+    due_date = Column(Date, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    assignee = relationship("User", foreign_keys=[assigned_to_id], back_populates="tasks_assigned")
+    assigner = relationship("User", foreign_keys=[assigned_by_id], back_populates="tasks_created")
 
 
 class SystemSettings(Base):

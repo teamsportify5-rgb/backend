@@ -5,11 +5,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func
 from app.database import get_db
-from app.models import User, UserRole, Order, Attendance, Payroll, AIImageLog, NotificationLog
+from app.models import User, UserRole, Order, Attendance, Payroll, AIImageLog, NotificationLog, Task
 from app.schemas import (
     UserCreate, UserUpdate, UserResponse, Token, LoginRequest, FCMTokenRequest,
     PasswordResetRequest, PasswordResetResponse, PasswordResetRequestInput,
-    PasswordResetRequestAck, ChangePasswordRequest,
+    PasswordResetRequestAck, ChangePasswordRequest, ChangeEmailRequest, ChangeEmailResponse,
 )
 from app.notification_history import notify_user_and_record, record_notification
 from app.auth import (
@@ -40,6 +40,11 @@ def _delete_user_dependencies(db: Session, user_id: int) -> None:
     db.query(NotificationLog).filter(NotificationLog.user_id == user_id).delete(synchronize_session=False)
     db.query(NotificationLog).filter(NotificationLog.sent_by_user_id == user_id).update(
         {NotificationLog.sent_by_user_id: None},
+        synchronize_session=False,
+    )
+    db.query(Task).filter(Task.assigned_to_id == user_id).delete(synchronize_session=False)
+    db.query(Task).filter(Task.assigned_by_id == user_id).update(
+        {Task.assigned_by_id: None},
         synchronize_session=False,
     )
 
@@ -199,6 +204,46 @@ async def change_password(
     db.commit()
     db.refresh(current_user)
     return current_user
+
+
+@router.post("/change-email", response_model=ChangeEmailResponse)
+async def change_email(
+    body: ChangeEmailRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """User changes their own email (new address must be @sportify.com). Returns a new JWT."""
+    if not verify_password(body.password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password is incorrect",
+        )
+
+    new_email = str(body.new_email).strip().lower()
+    if new_email == current_user.email.lower():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New email is the same as your current email",
+        )
+
+    existing = db.query(User).filter(func.lower(User.email) == new_email).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
+
+    current_user.email = new_email
+    db.commit()
+    db.refresh(current_user)
+
+    token = _token_response_for_user(current_user)
+    return ChangeEmailResponse(
+        message="Email updated successfully. Use your new email next time you sign in.",
+        access_token=token.access_token,
+        token_type=token.token_type,
+        user=current_user,
+    )
 
 
 @router.post("/register-fcm-token")
