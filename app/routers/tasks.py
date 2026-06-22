@@ -7,7 +7,7 @@ from app.auth import get_current_user
 from app.database import get_db
 from app.models import Task, User, UserRole
 from app.notification_history import notify_user_and_record
-from app.schemas import TaskCreate, TaskUpdate, TaskResponse
+from app.schemas import TaskCreate, TaskUpdate, TaskResponse, UserResponse
 
 router = APIRouter()
 
@@ -119,6 +119,21 @@ async def list_tasks(
 
     tasks = query.order_by(Task.created_at.desc()).offset(skip).limit(limit).all()
     return [_task_to_response(t) for t in tasks]
+
+
+@router.get("/assignees", response_model=List[UserResponse])
+async def list_task_assignees(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Users who can receive a task (worker, manager, accountant) — same pool as User Management."""
+    _require_admin_or_manager(current_user)
+    return (
+        db.query(User)
+        .filter(User.role.in_(list(_ASSIGNABLE_ROLES)))
+        .order_by(User.name)
+        .all()
+    )
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
