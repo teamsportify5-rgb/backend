@@ -173,6 +173,7 @@ class TaskResponse(TaskBase):
     id: int
     assigned_to_id: int
     assigned_to_name: Optional[str] = None
+    assigned_to_role: Optional[str] = None
     assigned_by_id: Optional[int] = None
     assigned_by_name: Optional[str] = None
     status: TaskStatus

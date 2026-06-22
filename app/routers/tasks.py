@@ -21,6 +21,7 @@ def _task_to_response(task: Task) -> TaskResponse:
         description=task.description,
         assigned_to_id=task.assigned_to_id,
         assigned_to_name=task.assignee.name if task.assignee else None,
+        assigned_to_role=task.assignee.role.value if task.assignee else None,
         assigned_by_id=task.assigned_by_id,
         assigned_by_name=task.assigner.name if task.assigner else None,
         status=task.status,
