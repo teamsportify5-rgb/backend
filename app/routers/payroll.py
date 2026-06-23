@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 from app.database import get_db
 from app.models import User, Attendance, Payroll, AttendanceStatus, UserRole
-from app.schemas import PayrollCreate, PayrollResponse, PayrollUpdate
+from app.schemas import PayrollCreate, PayrollResponse, PayrollUpdate, UserResponse
 from app.auth import get_current_user
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -18,6 +18,13 @@ from io import BytesIO
 from app.system_settings import get_tax_rate
 
 router = APIRouter()
+
+_PAYROLL_ELIGIBLE_ROLES = (
+    UserRole.WORKER,
+    UserRole.MANAGER,
+    UserRole.ACCOUNTANT,
+    UserRole.ADMIN,
+)
 
 
 def _reject_customer_payroll(current_user: User) -> None:
@@ -359,6 +366,26 @@ async def get_all_payroll_records(
     )
 
     return payroll_records
+
+
+@router.get("/employees", response_model=List[UserResponse])
+async def list_payroll_employees(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Staff eligible for payroll (worker, manager, accountant, admin)."""
+    _reject_customer_payroll(current_user)
+    if current_user.role.value not in ["admin", "manager", "accountant"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to list payroll employees",
+        )
+    return (
+        db.query(User)
+        .filter(User.role.in_(_PAYROLL_ELIGIBLE_ROLES))
+        .order_by(User.name)
+        .all()
+    )
 
 
 @router.get("/{employee_id}", response_model=List[PayrollResponse])
