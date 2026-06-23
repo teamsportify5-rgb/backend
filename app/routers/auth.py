@@ -280,8 +280,8 @@ async def get_users(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get list of users. Only admin and manager can access this endpoint."""
-    if current_user.role.value not in ["admin", "manager"]:
+    """Get list of users. Admin, manager, and accountant can list users (accountant: payroll)."""
+    if current_user.role.value not in ["admin", "manager", "accountant"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to view users"
